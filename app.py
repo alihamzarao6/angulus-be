@@ -1,7 +1,7 @@
 from bson import ObjectId
 from fastapi.exceptions import RequestValidationError
 from typing_extensions import List, Optional
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, Depends
 from openai import OpenAI
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -17,6 +17,10 @@ import os
 from db import db
 from openai.types.responses.easy_input_message_param import EasyInputMessageParam
 from uuid import uuid4
+
+# AUTHENTICATION
+from auth.routes import router as auth_router
+from auth.dependencies import get_current_user
 
 
 load_dotenv()
@@ -43,6 +47,9 @@ app.add_middleware(
 
 # Mount the output directory for static file serving
 app.mount("/output", StaticFiles(directory="output"), name="output")
+
+# AUTHENTICATION ROUTES
+app.include_router(auth_router)
 
 class MessageRequest(BaseModel):
     content: str
@@ -89,7 +96,11 @@ async def hello_world():
 
 
 @app.post("/message")
-async def send_message(request: MessageRequest):
+async def send_message(
+    request: MessageRequest,
+    current_user: dict = Depends(get_current_user)  # ADD AUTHENTICATION
+    ):
+    
     session_id = request.session_id or str(uuid4())
 
     # save user's message request
@@ -97,6 +108,7 @@ async def send_message(request: MessageRequest):
         "content": request.content,
         "agent_id": request.agent_id,
         "session_id": session_id,
+        "user_id": str(current_user["_id"]),  # ADD USER TRACKING
         "role": "user"
     })
 
@@ -108,7 +120,10 @@ async def send_message(request: MessageRequest):
                 role=x['role']
             ),
             db.request_history.find(
-                filter={"session_id": session_id},
+                filter={
+                    "session_id": session_id,
+                    "user_id": str(current_user["_id"])  # FILTER BY USER
+                },
                 # sort={"_id": -1},
                 limit=20
             )
@@ -141,6 +156,7 @@ async def send_message(request: MessageRequest):
             "content": response.final_output,
             "agent_id": request.agent_id,
             "session_id": session_id,
+            "user_id": str(current_user["_id"]),  # ADD USER TRACKING
             "role": "assistant"
         })
 
@@ -157,13 +173,14 @@ async def send_message(request: MessageRequest):
             "content": result.final_output,
             "agent_id": request.agent_id,
             "session_id": session_id,
+            "user_id": str(current_user["_id"]),  # ADD USER TRACKING
             "role": "assistant"
         })
         return {"message": result.final_output, "session_id": session_id}
 
 
 @app.post("/agents/message")
-async def run_agent_message(request: MessageRequest):
+async def run_agent_message(request: MessageRequest, current_user: dict = Depends(get_current_user)):
     agent = Agent(
         name="Web Scraping Assistant (default)", 
         instructions="""
@@ -180,13 +197,13 @@ async def run_agent_message(request: MessageRequest):
 
 
 @app.get("/tools")
-async def list_available_tools():
+async def list_available_tools(current_user: dict = Depends(get_current_user)):
     tools = list(db.tools.find({"name": {"$ne": create_agent_tool.name}}))
     return parse_mongo_documents(tools)
 
 
 @app.get("/agents")
-async def list_available_agents():
+async def list_available_agents(current_user: dict = Depends(get_current_user)):
     agents = list(db.agents.find({}))
     # parsed_agents = parse_mongo_documents(agents)
     
@@ -201,20 +218,22 @@ async def list_available_agents():
 
 
 @app.post("/agents")
-async def create_agent(request: CreateAgentRequest):
+async def create_agent(request: CreateAgentRequest, current_user: dict = Depends(get_current_user)):
     tools = list(db.tools.find({"_id": {"$in": list(map(lambda x: ObjectId(x), request.tools))}}))
 
     agent = db.agents.insert_one({
-        "name": request.name, "instructions": request.instructions,
+        "name": request.name, 
+        "instructions": request.instructions,
         "tools": list(map(lambda x: x.get("_id"), tools)),
         "is_editable": True,
-        "icon_name": request.icon_name
+        "icon_name": request.icon_name,
+        "created_by": str(current_user["_id"])  # TRACK WHO CREATED THE AGENT
     })
 
     return {"message": "created agent", "agent_id": str(agent.inserted_id)}
 
 @app.get('/agents/{agent_id}')
-def view_agent_details(agent_id: str):
+def view_agent_details(agent_id: str, current_user: dict = Depends(get_current_user)):
     if not ObjectId.is_valid(agent_id):
         raise HTTPException(status_code=400, detail="Invalid agent id")
     
@@ -254,10 +273,10 @@ def view_agent_details(agent_id: str):
 
 
 @app.get('/prompt-history')
-async def get_conversation_history():
+async def get_conversation_history(current_user: dict = Depends(get_current_user)):
     # Get distinct messages based on content and agent_id to prevent duplicates
     history = list(db.request_history.aggregate([
-        { "$match": { "role": "user" } },
+        { "$match": { "role": "user", "user_id": str(current_user["_id"]) } },
         {
             "$group": {
                 "_id": {
@@ -278,7 +297,7 @@ async def get_conversation_history():
 
 
 @app.put('/agents/{agent_id}')
-async def update_agent(agent_id: str, request: CreateAgentRequest):
+async def update_agent(agent_id: str, request: CreateAgentRequest, current_user: dict = Depends(get_current_user)):
     try:
         if not ObjectId.is_valid(agent_id):
             raise HTTPException(status_code=400, detail="Invalid agent id")
@@ -322,7 +341,7 @@ async def update_agent(agent_id: str, request: CreateAgentRequest):
 
 
 @app.delete('/agents/{agent_id}')
-async def delete_agent(agent_id: str):
+async def delete_agent(agent_id: str, current_user: dict = Depends(get_current_user)):
     try:
         if not ObjectId.is_valid(agent_id):
             raise HTTPException(status_code=400, detail="Invalid agent id")
@@ -349,13 +368,13 @@ async def delete_agent(agent_id: str):
 
 
 @app.get("/settings")
-async def view_settings():
+async def view_settings(current_user: dict = Depends(get_current_user)):
     settings = db.settings.find_one({})
     return parse_mongo_document(settings)
 
 
 @app.patch("/settings")
-async def save_settings(request: SettingsRequest):
+async def save_settings(request: SettingsRequest, current_user: dict = Depends(get_current_user)):
     data = {}
     if request.model_settings:
         data["model_settings"] = request.model_settings.model_dump(mode="python")
@@ -375,7 +394,7 @@ async def save_settings(request: SettingsRequest):
 
 
 @app.get("/log-exports")
-async def export_logs(export_type: str = "txt"):
+async def export_logs(export_type: str = "txt", current_user: dict = Depends(get_current_user)):
     if export_type == "txt":
         try:
             with open("tools.log", "r") as log_file:

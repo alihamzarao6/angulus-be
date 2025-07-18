@@ -1,0 +1,4 @@
+{
+    "editor.defaultFormatter": "ms-python.python",
+    "notebook.defaultFormatter": "KevinRose.vsc-python-indent"
+}

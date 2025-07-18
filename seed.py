@@ -17,9 +17,9 @@ def seed_tools():
     # Upsert each tool
     for tool in tools:
         tools_collection.update_one(
-            {"name": tool["name"]},  # Query to find the document
-            {"$set": tool},          # Data to update/insert
-            upsert=True              # Create if doesn't exist
+            {"name": tool["name"]},
+            {"$set": tool},
+            upsert=True
         )
 
     builder_agent_available_tools = f"\n".join(list(map(lambda x: f"Name: {x['name']}\nDescription: {x['description']}", filter(lambda x: x['name'] != create_agent.name, tools))))
@@ -30,7 +30,7 @@ def seed_tools():
             "$set": {
                 "name": "Agent Builder Assistant (system)",
                 "instructions": f"""
-                You are a helpful assistant responsible for creating new agents and equipping them with the appropriate tools based on their intended behavior.\nUse the create_agent_tool function to register a new agent by providing the agent’s name, a clear description of what the agent should do (its instructions), and a list of tool names it should be allowed to use.\nEnsure the tool names match existing tools in the system, or the agent may be created without proper functionality.\nAvailable Tools:\n{builder_agent_available_tools}"""
+                You are a helpful assistant responsible for creating new agents and equipping them with the appropriate tools based on their intended behavior.\nUse the create_agent_tool function to register a new agent by providing the agent's name, a clear description of what the agent should do (its instructions), and a list of tool names it should be allowed to use.\nEnsure the tool names match existing tools in the system, or the agent may be created without proper functionality.\nAvailable Tools:\n{builder_agent_available_tools}"""
                 .strip(),
                 "tools": list(map(lambda x: x['_id'], db.tools.find({"name": create_agent.name}))),
                 "is_editable": False
@@ -78,5 +78,23 @@ def seed_tools():
                 }
             }
         }, upsert=True)
+
+    # CREATE INDEXES FOR BETTER PERFORMANCE
+    try:
+        # Users collection indexes
+        db.users.create_index("email", unique=True)
+        db.users.create_index("verification_token")
+        db.users.create_index("password_reset_token")
+        
+        # Activity logs index
+        db.activity_logs.create_index([("user_id", 1), ("timestamp", -1)])
+        db.activity_logs.create_index("timestamp", expireAfterSeconds=7*24*60*60)  # Auto-delete after 7 days
+        
+        # Request history index
+        db.request_history.create_index([("user_id", 1), ("session_id", 1)])
+        
+        print("Database indexes created successfully!")
+    except Exception as e:
+        print(f"Index creation warning: {e}")
         
     print("Tools seeded successfully!")
