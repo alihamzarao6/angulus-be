@@ -1,0 +1,9 @@
+.env
+.env.docker
+.venv/
+output/*
+__pycache__/
+**/__pycache__/
+output/*!.gitkeep
+*.log
+tools.log
