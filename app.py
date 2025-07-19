@@ -1,15 +1,15 @@
 from bson import ObjectId
-from fastapi.exceptions import RequestValidationError
+# from fastapi.exceptions import RequestValidationError
 from typing_extensions import List, Optional
-from fastapi import FastAPI, HTTPException, Response, Depends
+from fastapi import FastAPI, HTTPException, Response, Depends, Request
 from openai import OpenAI
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from agents import Agent, Runner, handoff
-from agents.tool import WebSearchTool
-from seed import seed_tools
+# from agents.tool import WebSearchTool
+# from seed import seed_tools
 from tools import scrape_multiple_links, scrape_web_page, create_csv_file, create_agent as create_agent_tool
 from json_parser import parse_mongo_documents, parse_mongo_document
 from utils import build_agent
@@ -21,6 +21,11 @@ from uuid import uuid4
 # AUTHENTICATION
 from auth.routes import router as auth_router
 from auth.dependencies import get_current_user
+
+# LOGS
+from logs.routes import router as logs_router
+from logs.utils import log_user_activity
+from logs.models import ActivityAction
 
 
 load_dotenv()
@@ -35,7 +40,7 @@ client = OpenAI(api_key=api_key)
 app = FastAPI()
 
 # seed tools to db
-seed_tools()
+# seed_tools()
 
 
 app.add_middleware(
@@ -50,6 +55,9 @@ app.mount("/output", StaticFiles(directory="output"), name="output")
 
 # AUTHENTICATION ROUTES
 app.include_router(auth_router)
+
+# LOGGING ROUTES
+app.include_router(logs_router)
 
 class MessageRequest(BaseModel):
     content: str
@@ -98,10 +106,24 @@ async def hello_world():
 @app.post("/message")
 async def send_message(
     request: MessageRequest,
+    req: Request,
     current_user: dict = Depends(get_current_user)  # ADD AUTHENTICATION
     ):
     
     session_id = request.session_id or str(uuid4())
+    
+    # LOG CHAT ACTIVITY - ADD THIS
+    log_user_activity(
+        user_id=str(current_user["_id"]),
+        action=ActivityAction.CHAT_MESSAGE_SENT,
+        details={
+            "content_length": len(request.content),
+            "agent_id": request.agent_id,
+            "session_id": session_id,
+            "has_agent": bool(request.agent_id)
+        },
+        request=req
+    )
 
     # save user's message request
     db.request_history.insert_one({
@@ -180,7 +202,20 @@ async def send_message(
 
 
 @app.post("/agents/message")
-async def run_agent_message(request: MessageRequest, current_user: dict = Depends(get_current_user)):
+async def run_agent_message(request: MessageRequest, req: Request, current_user: dict = Depends(get_current_user)):
+    
+     # LOG AGENT MESSAGE ACTIVITY - ADD THIS
+    log_user_activity(
+        user_id=str(current_user["_id"]),
+        action=ActivityAction.AGENT_MESSAGE_SENT,
+        details={
+            "content_length": len(request.content),
+            "agent_id": request.agent_id,
+            "session_id": request.session_id
+        },
+        request=req
+    )
+    
     agent = Agent(
         name="Web Scraping Assistant (default)", 
         instructions="""
@@ -218,7 +253,7 @@ async def list_available_agents(current_user: dict = Depends(get_current_user)):
 
 
 @app.post("/agents")
-async def create_agent(request: CreateAgentRequest, current_user: dict = Depends(get_current_user)):
+async def create_agent(request: CreateAgentRequest, req: Request, current_user: dict = Depends(get_current_user)):
     tools = list(db.tools.find({"_id": {"$in": list(map(lambda x: ObjectId(x), request.tools))}}))
 
     agent = db.agents.insert_one({
@@ -229,6 +264,19 @@ async def create_agent(request: CreateAgentRequest, current_user: dict = Depends
         "icon_name": request.icon_name,
         "created_by": str(current_user["_id"])  # TRACK WHO CREATED THE AGENT
     })
+    
+     # LOG AGENT CREATION ACTIVITY - ADD THIS
+    log_user_activity(
+        user_id=str(current_user["_id"]),
+        action=ActivityAction.AGENT_CREATED,
+        details={
+            "agent_name": request.name,
+            "agent_id": str(agent.inserted_id),
+            "tools_count": len(request.tools),
+            "icon_name": request.icon_name
+        },
+        request=req
+    )
 
     return {"message": "created agent", "agent_id": str(agent.inserted_id)}
 
@@ -297,7 +345,7 @@ async def get_conversation_history(current_user: dict = Depends(get_current_user
 
 
 @app.put('/agents/{agent_id}')
-async def update_agent(agent_id: str, request: CreateAgentRequest, current_user: dict = Depends(get_current_user)):
+async def update_agent(agent_id: str, request: CreateAgentRequest, req: Request, current_user: dict = Depends(get_current_user)):
     try:
         if not ObjectId.is_valid(agent_id):
             raise HTTPException(status_code=400, detail="Invalid agent id")
@@ -331,6 +379,19 @@ async def update_agent(agent_id: str, request: CreateAgentRequest, current_user:
                 }
             }
         )
+        
+        # LOG AGENT UPDATE ACTIVITY - ADD THIS
+        log_user_activity(
+            user_id=str(current_user["_id"]),
+            action=ActivityAction.AGENT_UPDATED,
+            details={
+                "agent_name": request.name,
+                "agent_id": agent_id,
+                "tools_count": len(request.tools),
+                "icon_name": request.icon_name
+            },
+            request=req
+        )
 
         return {"message": "Agent updated successfully", "agent_id": agent_id}
 
@@ -341,7 +402,7 @@ async def update_agent(agent_id: str, request: CreateAgentRequest, current_user:
 
 
 @app.delete('/agents/{agent_id}')
-async def delete_agent(agent_id: str, current_user: dict = Depends(get_current_user)):
+async def delete_agent(agent_id: str, req: Request, current_user: dict = Depends(get_current_user)):
     try:
         if not ObjectId.is_valid(agent_id):
             raise HTTPException(status_code=400, detail="Invalid agent id")
@@ -357,6 +418,17 @@ async def delete_agent(agent_id: str, current_user: dict = Depends(get_current_u
 
         # Delete agent
         db.agents.delete_one({"_id": ObjectId(agent_id)})
+        
+         # LOG AGENT DELETION ACTIVITY - ADD THIS
+        log_user_activity(
+            user_id=str(current_user["_id"]),
+            action=ActivityAction.AGENT_DELETED,
+            details={
+                "agent_name": agent.get("name", "Unknown"),
+                "agent_id": agent_id
+            },
+            request=req
+        )
         
         return {"message": "Agent deleted successfully"}
 
@@ -374,7 +446,7 @@ async def view_settings(current_user: dict = Depends(get_current_user)):
 
 
 @app.patch("/settings")
-async def save_settings(request: SettingsRequest, current_user: dict = Depends(get_current_user)):
+async def save_settings(request: SettingsRequest, req: Request, current_user: dict = Depends(get_current_user)):
     data = {}
     if request.model_settings:
         data["model_settings"] = request.model_settings.model_dump(mode="python")
@@ -389,6 +461,20 @@ async def save_settings(request: SettingsRequest, current_user: dict = Depends(g
         raise HTTPException(status_code=400, detail="provide a setting to update")
 
     db.settings.update_one({}, {"$set": data}, upsert=True)
+    
+     # LOG SETTINGS UPDATE ACTIVITY - ADD THIS
+    log_user_activity(
+        user_id=str(current_user["_id"]),
+        action=ActivityAction.SETTINGS_UPDATED,
+        details={
+            "updated_sections": list(data.keys()),
+            "has_model_settings": "model_settings" in data,
+            "has_log_settings": "log_settings" in data,
+            "has_profile_settings": "profile_settings" in data
+        },
+        request=req
+    )
+    
     settings_config = db.settings.find_one({})
     return parse_mongo_document(settings_config)
 

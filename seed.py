@@ -86,9 +86,11 @@ def seed_tools():
         db.users.create_index("verification_token")
         db.users.create_index("password_reset_token")
         
-        # Activity logs index
+        # Activity logs indexes - ENHANCED
         db.activity_logs.create_index([("user_id", 1), ("timestamp", -1)])
-        db.activity_logs.create_index("timestamp", expireAfterSeconds=7*24*60*60)  # Auto-delete after 7 days
+        db.activity_logs.create_index([("user_id", 1), ("action", 1)])
+        db.activity_logs.create_index("timestamp", expireAfterSeconds=90*24*60*60)  # Auto-delete after 90 days
+        db.activity_logs.create_index("action")  # For filtering by action type
         
         # Request history index
         db.request_history.create_index([("user_id", 1), ("session_id", 1)])

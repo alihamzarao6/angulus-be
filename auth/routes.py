@@ -1,8 +1,8 @@
 from fastapi import APIRouter, HTTPException, status, Depends
 from datetime import datetime, timedelta
-from bson import ObjectId
+# from bson import ObjectId
 from db import db
-from json_parser import parse_mongo_document
+# from json_parser import parse_mongo_document
 from .models import (
     UserRegister, UserLogin, UserResponse, TokenResponse,
     EmailVerificationRequest, PasswordResetRequest, PasswordResetConfirm, EmailResendRequest
@@ -12,6 +12,8 @@ from .utils import (
     generate_verification_token, send_verification_email, send_password_reset_email
 )
 from .dependencies import get_current_user, get_current_user_optional
+from logs.utils import log_user_activity
+from logs.models import ActivityAction
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -50,13 +52,15 @@ async def register_user(user_data: UserRegister):
         email_sent = send_verification_email(user_data.email, verification_token)
         
         # Log registration activity
-        db.activity_logs.insert_one({
-            "user_id": str(result.inserted_id),
-            "action": "user_registration",
-            "timestamp": datetime.utcnow(),
-            "details": {"email": user_data.email, "email_sent": email_sent}
-        })
-        
+        log_user_activity(
+        user_id=str(result.inserted_id),
+        action=ActivityAction.USER_REGISTRATION,
+        details={
+            "email": user_data.email,
+            "email_sent": email_sent,
+            "username": user_data.username or user_data.email.split("@")[0]
+        }
+    )
         return {
             "success": True,
             "message": "User registered successfully. Please check your email to verify your account.",
@@ -109,11 +113,14 @@ async def verify_email(request: EmailVerificationRequest):
         )
         
         # Log verification activity
-        db.activity_logs.insert_one({
-            "user_id": str(user["_id"]),
-            "action": "email_verification",
-            "timestamp": datetime.utcnow()
-        })
+        log_user_activity(
+        user_id=str(user["_id"]),
+        action=ActivityAction.EMAIL_VERIFICATION,
+        details={
+            "email": user.get("email"),
+            "verified_at": datetime.utcnow().isoformat()
+        }
+    )
         
         return {
             "success": True,
@@ -171,11 +178,14 @@ async def login_user(user_data: UserLogin):
         )
         
         # Log login activity
-        db.activity_logs.insert_one({
-            "user_id": str(user["_id"]),
-            "action": "user_login",
-            "timestamp": datetime.utcnow()
-        })
+        log_user_activity(
+        user_id=str(user["_id"]),
+        action=ActivityAction.USER_LOGIN,
+        details={
+            "email": user["email"],
+            "login_method": "email_password"
+        }
+    )
         
         # Prepare user response
         user_response = UserResponse(
@@ -286,12 +296,15 @@ async def forgot_password(request: PasswordResetRequest):
         email_sent = send_password_reset_email(user["email"], reset_token)
         
         # Log password reset request
-        db.activity_logs.insert_one({
-            "user_id": str(user["_id"]),
-            "action": "password_reset_request",
-            "timestamp": datetime.utcnow(),
-            "details": {"email_sent": email_sent}
-        })
+        log_user_activity(
+        user_id=str(user["_id"]),
+        action=ActivityAction.PASSWORD_RESET_REQUEST,
+        details={
+            "email": user["email"],
+            "email_sent": email_sent,
+            "request_time": datetime.utcnow().isoformat()
+        }
+    )
         
         return {
             "success": True,
@@ -335,11 +348,14 @@ async def reset_password(request: PasswordResetConfirm):
         )
         
         # Log password reset
-        db.activity_logs.insert_one({
-            "user_id": str(user["_id"]),
-            "action": "password_reset_completed",
-            "timestamp": datetime.utcnow()
-        })
+        log_user_activity(
+        user_id=str(user["_id"]),
+        action=ActivityAction.PASSWORD_RESET_COMPLETED,
+        details={
+            "email": user.get("email"),
+            "reset_time": datetime.utcnow().isoformat()
+        }
+    )
         
         return {
             "success": True,
@@ -359,11 +375,14 @@ async def logout_user(current_user: dict = Depends(get_current_user)):
     """Logout user (client should delete token)"""
     try:
         # Log logout activity
-        db.activity_logs.insert_one({
-            "user_id": str(current_user["_id"]),
-            "action": "user_logout",
-            "timestamp": datetime.utcnow()
-        })
+        log_user_activity(
+            user_id=str(current_user["_id"]),
+            action=ActivityAction.USER_LOGOUT,
+            details={
+                "email": current_user.get("email"),
+                "logout_time": datetime.utcnow().isoformat()
+            }
+        )
         
         return {
             "success": True,
