@@ -1,9 +1,10 @@
+from dotenv import load_dotenv
+import os
 from bson import ObjectId
 # from fastapi.exceptions import RequestValidationError
 from typing_extensions import List, Optional
 from fastapi import FastAPI, HTTPException, Response, Depends, Request
 from openai import OpenAI
-from dotenv import load_dotenv
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -13,7 +14,6 @@ from agents import Agent, Runner, handoff
 from tools import scrape_multiple_links, scrape_web_page, create_csv_file, create_agent as create_agent_tool
 from json_parser import parse_mongo_documents, parse_mongo_document
 from utils import build_agent
-import os
 from db import db
 from openai.types.responses.easy_input_message_param import EasyInputMessageParam
 from uuid import uuid4
