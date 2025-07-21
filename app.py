@@ -1,5 +1,8 @@
 from dotenv import load_dotenv
 import os
+
+load_dotenv()
+
 from bson import ObjectId
 # from fastapi.exceptions import RequestValidationError
 from typing_extensions import List, Optional
@@ -26,9 +29,6 @@ from auth.dependencies import get_current_user
 from logs.routes import router as logs_router
 from logs.utils import log_user_activity
 from logs.models import ActivityAction
-
-
-load_dotenv()
 
 # Get API key from environment variable
 api_key = os.getenv("OPENAI_API_KEY")
