@@ -87,7 +87,7 @@ def send_email(to_email: str, subject: str, body: str, is_html: bool = False):
         
         msg.attach(MIMEText(body, 'html' if is_html else 'plain'))
         
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=5)
         server.starttls()
         server.login(SMTP_USERNAME, SMTP_PASSWORD)
         text = msg.as_string()
