@@ -5,15 +5,13 @@
 
 import os
 import secrets
-import smtplib
 from datetime import datetime, timedelta
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from typing import Optional
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from fastapi import HTTPException, status
 from bson import ObjectId
+import requests
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -24,11 +22,10 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30 * 24 * 60  # 30 days
 
 # Email configuration
-SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USERNAME = os.getenv("SMTP_USERNAME")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USERNAME)
+MAILGUN_API_KEY = os.getenv("MAILGUN_API_KEY")
+MAILGUN_DOMAIN = os.getenv("MAILGUN_DOMAIN")
+MAILGUN_BASE_URL = os.getenv("MAILGUN_BASE_URL", "https://api.mailgun.net/v3/")
+FROM_EMAIL = os.getenv("FROM_EMAIL", "noreply@atlasprimebr.com")
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 
 def hash_password(password: str) -> str:
@@ -73,29 +70,32 @@ def generate_verification_token() -> str:
     return secrets.token_urlsafe(32)
 
 def send_email(to_email: str, subject: str, body: str, is_html: bool = False):
-    """Send email using SMTP"""
-    if not SMTP_USERNAME or not SMTP_PASSWORD:
+    """Send email using Mailgun"""
+    if not MAILGUN_API_KEY or not MAILGUN_DOMAIN:
         print(f"EMAIL SIMULATION - To: {to_email}, Subject: {subject}")
-        print(f"Body: {body}")
         return True
     
     try:
-        msg = MIMEMultipart()
-        msg['From'] = FROM_EMAIL
-        msg['To'] = to_email
-        msg['Subject'] = subject
+        url = f"{MAILGUN_BASE_URL}{MAILGUN_DOMAIN}/messages"
+        auth = ("api", MAILGUN_API_KEY)
+        data = {
+            "from": f"Atlas Prime <{FROM_EMAIL}>",
+            "to": to_email,
+            "subject": subject,
+            "html" if is_html else "text": body
+        }
         
-        msg.attach(MIMEText(body, 'html' if is_html else 'plain'))
+        response = requests.post(url, auth=auth, data=data, timeout=10)
         
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=5)
-        server.starttls()
-        server.login(SMTP_USERNAME, SMTP_PASSWORD)
-        text = msg.as_string()
-        server.sendmail(FROM_EMAIL, to_email, text)
-        server.quit()
-        return True
+        if response.status_code == 200:
+            print(f"✅ Email sent successfully to {to_email}")
+            return True
+        else:
+            print(f"❌ Failed to send email: {response.status_code} - {response.text}")
+            return False
+            
     except Exception as e:
-        print(f"Failed to send email: {e}")
+        print(f"❌ Email error: {e}")
         return False
 
 def send_verification_email(email: str, token: str):
